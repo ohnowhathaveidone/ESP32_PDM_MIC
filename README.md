@@ -5,3 +5,5 @@ The I2S interface is based on code provided by https://github.com/GrahamM/ESP32_
 UDP server is based on example code provided by https://github.com/espressif/esp-idf/tree/master/examples/protocols/sockets/udp_server  
 
 Compile and flash with ESP IDF: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/  
+
+Currently, -O2 is set in compiler options. Change in menuconfig for debug builds.   
