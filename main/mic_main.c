@@ -33,7 +33,7 @@
 
 #include "freertos/event_groups.h"
 
-
+//adjust to suit your wifi settings
 #define SSID "iamnotgoodwithcomputer"
 #define PASS "ohnowhathaveidone"
 #define MAXRETRY 10
@@ -378,6 +378,8 @@ void app_main(void)
     }
 
     //seems tpo work without this too... 
+    //i had the feeling that without anything in the main loop, the two other tasks starve 
+    //the watchdog. but this delay doesn't seem to have changed anything. 
     while(1) {
         vTaskDelay(xDelay);
     }
