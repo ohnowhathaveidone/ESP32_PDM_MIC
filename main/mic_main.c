@@ -54,7 +54,8 @@ static int s_retry_num = 0; //ok...
 
 //buffer for mic data
 //uint8_t buffer[2048];
-uint32_t buffer[512]; 
+//uint32_t buffer[512]; 
+uint32_t buffer[1024];
 
 //volatile uint16_t rPtr = 0; // Yes, I should be using a pointer.
 //size_t readOut;
@@ -186,6 +187,7 @@ static void udp_server_task(void *pvParameters)
             ip_protocol = IPPROTO_IP;
 
             sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+            //sock = socket(addr_family, SOCK_STREAM, ip_protocol);
             if (sock < 0) {
                 ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
                 break;
@@ -224,7 +226,8 @@ static void udp_server_task(void *pvParameters)
                 
                 //TODO: replace 1024 w/ variable!!!!!
                 bufReady = false;
-                int err = sendto(sock, (uint8_t*)buffer + bufOffset, 1024, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
+                //printf("%d\n", bufOffset);
+                int err = sendto(sock, (uint8_t*)buffer + bufOffset, 2048, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
                 if (err < 0) {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
@@ -254,27 +257,27 @@ void I2SSetup() {
 
     // The I2S config as per the example
     static const i2s_config_t i2s_config = {
-        .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM, // We drive clk but only receive
-                               //  1      2             3      6      7        8       9      10      11      12
-        .sample_rate = 192000, //72000, //48000, //16000, 32000, 44100, 48000, 96000, 112000, 128000, 144000, 160000, 176000, 192000 //48k seems to work well so far
-        .bits_per_sample = 32, //I2S_BITS_PER_SAMPLE_32BIT, // WS signal must be BCLK/64 - this is how we manage it
+        .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM, // We drive clk, only receive. NOTE: in PDM mode, clk is on WS line
+        .sample_rate = 200000, //record with sample_rate/2 
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, //I2S_BITS_PER_SAMPLE_32BIT/I2S_BITS_PER_SAMPLE_24BIT/I2S_BITS_PER_SAMPLE_16BIT, // WS signal must be BCLK/64 - this is how we manage it
         .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,  // Left by default 
         .communication_format = I2S_COMM_FORMAT_STAND_MSB,// (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt level 1
         .dma_buf_count = 4,                           // number of buffers
         .dma_buf_len = BLOCK_SIZE,                    // samples per buffer
         .use_apll = 1,
-        .fixed_mclk = 124000000,
+        .fixed_mclk = 124000000, //115200000, // 38400000, //124000000, ->38400000! //
     };
 
     // The pin config as per the setup
     //update: great - the mic is being clocked via the WS pin... 
     const i2s_pin_config_t pin_config = {
-        .bck_io_num = 12, //14,   // Bit Clk
-        .ws_io_num = 14, //-1, //12,    // LR Clk
+        .bck_io_num = -1, //14,   // Bit Clk
+        .ws_io_num = 14, //14, //-1, //12,    // LR Clk
         .data_out_num = -1, // Data out
         .data_in_num = 32   // Data in
     };
+
 
     // Configuring the I2S driver and pins.
     err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
@@ -316,7 +319,7 @@ static void mic_record_task(void *pvParameters)
 
         switch (state) {
             case 0: // wait for index to pass halfway
-                if (rPtr > 1023) {
+                if (rPtr > 2047) {
                     state = 1;
                 }
                 break;
@@ -325,10 +328,12 @@ static void mic_record_task(void *pvParameters)
                 state = 2;
                 bufReady = true;
                 bufOffset = 0;
+
+                //printf("tik\n");
                 break;
             case 2: // wait for index to wrap
                 //printf("state %d\n", state);
-                if (rPtr < 1023) {
+                if (rPtr < 2047) {
                     state = 3;
                 }
                 break;
@@ -336,12 +341,13 @@ static void mic_record_task(void *pvParameters)
                 //printf("state %d\n", state);
                 state = 0;
                 bufReady = true;
-                bufOffset = 1024;
+                bufOffset = 2048;
+                //printf("tok\n");
                 break;
             }
 
         // Wrap this when we get to the end of the buffer
-        if (rPtr > 2043) rPtr = 0; //wait, why 2043? 4 bytes/32 bit away from end?
+        if (rPtr > 4091) rPtr = 0; //wait, why 2043? 4 bytes/32 bit away from end? 4096
     }
     vTaskDelete(NULL);
 }
@@ -367,20 +373,22 @@ void app_main(void)
 
     //ESP_ERROR_CHECK(esp_event_loop_create_default());
     if (hasWifi) {
-        xTaskCreate(udp_server_task, "udp_server", 4096, (void*)AF_INET, 5, NULL);
+        //xTaskCreate(udp_server_task, "udp_server", 4096, (void*)AF_INET, 5, NULL);
+        xTaskCreatePinnedToCore(udp_server_task, "udp_server", 8192, (void*)NULL, 2, NULL, 1);
     }
     
     // this seems to be necessary to finalize the setup. without the delay, the udp server gets stuck somewhere. 
     vTaskDelay(xDelay);
 
     if (UDPruns) {
-        xTaskCreate(mic_record_task, "mic_record", 8192, (void*) NULL, 3, NULL);
+        xTaskCreatePinnedToCore(mic_record_task, "mic_record", 8192, (void*) NULL, 5, NULL, 1);
     }
 
     //seems tpo work without this too... 
     //i had the feeling that without anything in the main loop, the two other tasks starve 
     //the watchdog. but this delay doesn't seem to have changed anything. 
-    while(1) {
-        vTaskDelay(xDelay);
-    }
+    //
+    //while(1) {
+    //    vTaskDelay(xDelay);
+    //}
 }
