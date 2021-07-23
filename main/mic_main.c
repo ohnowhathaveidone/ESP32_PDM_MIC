@@ -45,6 +45,8 @@ static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
+#define SENDLEN 2048
+
 static bool hasWifi = false;
 static bool UDPruns = false;
 static bool bufReady = false;
@@ -53,13 +55,9 @@ static uint16_t bufOffset = 0;
 static int s_retry_num = 0; //ok...
 
 //buffer for mic data
-//uint8_t buffer[2048];
-//uint32_t buffer[512]; 
 uint32_t buffer[1024];
 
-//volatile uint16_t rPtr = 0; // Yes, I should be using a pointer.
-//size_t readOut;
-
+//wi-fi setup, connect and send loop
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
@@ -155,13 +153,7 @@ void wifi_init_sta(void)
     vEventGroupDelete(s_wifi_event_group);
 }
 
-// UDP Destination
-//IPAddress udpAddress(192, 168, 1, 101);
-// Connection state
-//bool connected = false;
-
-//this is for the udp server
-
+//udp server
 static struct sockaddr_in6 dest_addr;
 int sock = -1;
 int len = -1;
@@ -177,8 +169,8 @@ static void udp_server_task(void *pvParameters)
     int ip_protocol = 0;
     const TickType_t xDelay = 50 / portTICK_PERIOD_MS;
 
+    //establish socket
     while (1) {
-
         if (sock<0) {
             struct sockaddr_in *dest_addr_ip4 = (struct sockaddr_in *)&dest_addr;
             dest_addr_ip4->sin_addr.s_addr = htonl(INADDR_ANY);
@@ -187,7 +179,6 @@ static void udp_server_task(void *pvParameters)
             ip_protocol = IPPROTO_IP;
 
             sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
-            //sock = socket(addr_family, SOCK_STREAM, ip_protocol);
             if (sock < 0) {
                 ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
                 break;
@@ -201,11 +192,7 @@ static void udp_server_task(void *pvParameters)
             ESP_LOGI(TAG, "Socket bound, port %d", udpPort);
             UDPruns = true;
         }
-        
-        //int len = -1;
-        //struct sockaddr_in6 source_addr; // Large enough for both IPv4 or IPv6
-        //socklen_t socklen = sizeof(source_addr);
-
+        //wait for destination and send, when destination available
         while (1) {
             if (UDPruns && len<0) {
                 ESP_LOGI(TAG, "Waiting for data");
@@ -222,12 +209,8 @@ static void udp_server_task(void *pvParameters)
                     break;
                 }
             } else if (bufReady && len>0) {
-                //printf("sending data w/ offset %d\n", bufOffset); //too slow?..
-                
-                //TODO: replace 1024 w/ variable!!!!!
                 bufReady = false;
-                //printf("%d\n", bufOffset);
-                int err = sendto(sock, (uint8_t*)buffer + bufOffset, 2048, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
+                int err = sendto(sock, (uint8_t*)buffer + bufOffset, SENDLEN, 0, (struct sockaddr *)&source_addr, sizeof(source_addr));
                 if (err < 0) {
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     break;
@@ -255,27 +238,27 @@ const int BLOCK_SIZE = 128;
 void I2SSetup() {
     esp_err_t err;
 
-    // The I2S config as per the example
+    //I2S config 
     static const i2s_config_t i2s_config = {
-        .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM, // We drive clk, only receive. NOTE: in PDM mode, clk is on WS line
-        .sample_rate = 200000, //record with sample_rate/2 
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, //I2S_BITS_PER_SAMPLE_32BIT/I2S_BITS_PER_SAMPLE_24BIT/I2S_BITS_PER_SAMPLE_16BIT, // WS signal must be BCLK/64 - this is how we manage it
-        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,  // Left by default 
-        .communication_format = I2S_COMM_FORMAT_STAND_MSB,// (i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt level 1
-        .dma_buf_count = 4,                           // number of buffers
-        .dma_buf_len = BLOCK_SIZE,                    // samples per buffer
+        .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM, //NOTE: in PDM mode, clk is on WS line. BCLK does nothing
+        .sample_rate = 150000,                              //record with this sample rate, sample width for wave is 2 
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,       //original comment by @GrahamM: WS signal must be BCLK/64 - this is how we manage it
+                                                            //i just don't entirely get this setting, sorry
+        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,         //i have no clue if this setting actually changes anything 
+        .communication_format = I2S_COMM_FORMAT_STAND_MSB,  //(i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,           //Interrupt level 1
+        .dma_buf_count = 4,                                 //number of buffers
+        .dma_buf_len = BLOCK_SIZE,                          //samples per buffer
         .use_apll = 1,
-        .fixed_mclk = 124000000, //115200000, // 38400000, //124000000, ->38400000! //
+        .fixed_mclk = 38400000,                             //this is 8*clk on WS
     };
 
-    // The pin config as per the setup
-    //update: great - the mic is being clocked via the WS pin... 
+    //pin config 
     const i2s_pin_config_t pin_config = {
-        .bck_io_num = -1, //14,   // Bit Clk
-        .ws_io_num = 14, //14, //-1, //12,    // LR Clk
-        .data_out_num = -1, // Data out
-        .data_in_num = 32   // Data in
+        .bck_io_num = -1,   //Bit Clk - does nothing in PDM mode
+        .ws_io_num = 14,    //WS is actual clock
+        .data_out_num = -1, //data out
+        .data_in_num = 32   //data in
     };
 
 
@@ -286,7 +269,8 @@ void I2SSetup() {
         while (true);
     }
 
-    // Alterations for SPH0645 to ensure we receive MSB correctly.
+    //original comment by @GrahamM: Alterations for SPH0645 to ensure we receive MSB correctly.
+    //in my case these settings don't seem to change anything. I2S_COMM_FORMAT_STAND_MSB works just fine
     //REG_SET_BIT(I2S_TIMING_REG(I2S_PORT), BIT(9));   // I2S_RX_SD_IN_DELAY
     //REG_SET_BIT(I2S_CONF_REG(I2S_PORT), I2S_RX_MSB_SHIFT);  // Phillips I2S - WS changes a cycle earlier
 
@@ -298,11 +282,8 @@ void I2SSetup() {
     printf(" + I2S driver installed.\n");
 }
 
-//int32_t buffer[512];    // Effectively two 1024 byte buffers
-
-//static void udp_server_task(void *pvParameters)
-static void mic_record_task(void *pvParameters)
-{
+//task for recording samples off the microphone
+static void mic_record_task(void *pvParameters) {
     esp_err_t readErr;
     uint8_t state = 0; 
     volatile uint16_t rPtr = 0; // Yes, I should be using a pointer. 
@@ -341,23 +322,20 @@ static void mic_record_task(void *pvParameters)
                 //printf("state %d\n", state);
                 state = 0;
                 bufReady = true;
-                bufOffset = 2048;
+                bufOffset = SENDLEN;
                 //printf("tok\n");
                 break;
             }
 
         // Wrap this when we get to the end of the buffer
-        if (rPtr > 4091) rPtr = 0; //wait, why 2043? 4 bytes/32 bit away from end? 4096
+        if (rPtr > 4091) rPtr = 0; 
     }
     vTaskDelete(NULL);
 }
 
 
-void app_main(void)
-{
-    //int i = 0;
+void app_main(void) {
     I2SSetup();
-    //static uint8_t state = 0;
     const TickType_t xDelay = 1000 / portTICK_PERIOD_MS;
 
     //Initialize NVS
@@ -373,7 +351,6 @@ void app_main(void)
 
     //ESP_ERROR_CHECK(esp_event_loop_create_default());
     if (hasWifi) {
-        //xTaskCreate(udp_server_task, "udp_server", 4096, (void*)AF_INET, 5, NULL);
         xTaskCreatePinnedToCore(udp_server_task, "udp_server", 8192, (void*)NULL, 2, NULL, 1);
     }
     
