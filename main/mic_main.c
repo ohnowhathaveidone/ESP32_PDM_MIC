@@ -241,10 +241,10 @@ void I2SSetup() {
     //I2S config 
     static const i2s_config_t i2s_config = {
         .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM, //NOTE: in PDM mode, clk is on WS line. BCLK does nothing
-        .sample_rate = 150000,                              //record with this sample rate, sample width for wave is 2 
+        .sample_rate = 300000,                              //record with this sample rate, sample width for wave is 2 
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,       //original comment by @GrahamM: WS signal must be BCLK/64 - this is how we manage it
                                                             //i just don't entirely get this setting, sorry
-        .channel_format = I2S_CHANNEL_FMT_ALL_LEFT,         //i have no clue if this setting actually changes anything 
+        .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,         //i have no clue if this setting actually changes anything 
         .communication_format = I2S_COMM_FORMAT_STAND_MSB,  //(i2s_comm_format_t)(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,           //Interrupt level 1
         .dma_buf_count = 4,                                 //number of buffers
